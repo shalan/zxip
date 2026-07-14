@@ -2,7 +2,11 @@
 
 ## 1. Overview
 
-This document specifies a small **eXecute-in-Place (XiP)** QSPI flash controller for a **16-bit data/address** SoC.
+This document specifies a small **eXecute-in-Place (XiP)** QSPI flash controller for AHB-Lite SoCs.
+
+**Host port:** RTL is parameterized (`HOST_DW`, `HOST_AW` on `zxip_top`):
+- **16/16 (default)** — ZX16-style 16-bit AHB; fixed/paged window decode (§3).
+- **32/32** — RV32-style 32-bit AHB; flat `phys = HADDR[19:0]` (fabric `HSEL` bounds the aperture) unless `phys_valid` supplies `phys_i`.
 
 ### 1.1 Goals
 
@@ -15,7 +19,7 @@ This document specifies a small **eXecute-in-Place (XiP)** QSPI flash controller
 - Support a larger than 64 KB flash image via **physical addressing (20-bit)** and **paged windows**.
 - Provide a **simple APB CSR** interface for mode/timing control, and **bit-bang SPI only for programming** the connected flash (erase/program/verify), not for normal XiP bring-up.
 - Implement RTL in **IEEE Verilog-2005** (`*.v`), **vendor-agnostic** (programmable opcodes, dummy, continuous policy).
-- Verify with **pluggable flash behavioral models** (examples in-repo: `sst26wf080b.v`, `s28hs256m4.sv` — not sole targets).
+- Verify with **pluggable flash behavioral models** (in-repo example: `sst26wf080b.v`).
 
 ### 1.2 Non-goals (v1)
 
@@ -37,12 +41,12 @@ This document specifies a small **eXecute-in-Place (XiP)** QSPI flash controller
 
 | Property | Value |
 |----------|--------|
-| Address width (CPU AHB) | 16-bit (`HADDR[15:0]`) |
-| Data width (CPU AHB) | 16-bit |
+| Address width (CPU AHB) | **`HOST_AW`**: 16 (default) or 32 |
+| Data width (CPU AHB) | **`HOST_DW`**: 16 (default) or 32 |
 | Main memory fabric | AHB-Lite |
-| Peripheral fabric | APB (via AHB→APB bridge in MMIO region) |
+| Peripheral fabric | APB (via AHB→APB bridge in MMIO region); **APB always 16-bit** |
 | Flash physical address (controller) | **20-bit** byte address (`phys[19:0]`) → **1 MB** window |
-| Example flash VIPs | Microchip **SST26WF080B** (1 MB); Infineon **S28HS256M4** (32 MB model, low 1 MB used) |
+| Example flash VIP | Microchip **SST26WF080B** (1 MB) |
 | SPI address cycles | **24-bit** default (`spi_addr = {4'b0, phys[19:0]}`); optional 32-bit later |
 
 ### 2.2 System memory map (CPU view)
@@ -170,23 +174,26 @@ Single **AHB-Lite slave** port for CPU instruction/RO-data fetch from flash-back
 
 | Signal / behavior | Requirement |
 |-------------------|-------------|
-| Data width | 16-bit |
-| Address | 16-bit `HADDR` (region decode may be external; see §3) |
+| Data width | **`HOST_DW`** 16 or 32 (`HRDATA`/`HWDATA`) |
+| Address | **`HOST_AW`** 16 or 32 (`HADDR`) |
 | Transfers | Single / sequential AHB-Lite; no burst length requirement beyond Lite |
-| `HSIZE` | Byte and halfword only |
+| `HSIZE` | Byte and halfword always; **word** when `HOST_DW=32` |
+| Alignment | Unaligned half/word → **`HRESP = ERROR`** |
 | `HWRITE` | **Reads only** for success path |
-| Writes | Respond with **`HRESP = ERROR`** (recommended) or documented ignore; no cache update |
+| Writes | Respond with **`HRESP = ERROR`**; no cache update |
 | Wait states | `HREADY` low for miss / fill / flash busy as needed |
 | Error | Optional timeout sticky status; ERROR response policy documented in CSR |
 
-### 4.3 Sideband (implementation choice)
+### 4.3 Sideband / decode
 
 Either:
 
-- **A.** Interconnect supplies `xip_sel` + `phys[19:0]`, or  
-- **B.** XIP slave decodes `HADDR` and reads `FIXED_PAGE` / `PAGE_*` internally.
+- **A.** Interconnect supplies `phys_valid` + `phys_i[19:0]` (and fabric `HSEL`), or  
+- **B.** Internal decode:
+  - **`HOST_AW=16`:** fixed/paged windows on `HADDR[15:14]` + `FIXED_PAGE` / `PAGE_*` (§3).
+  - **`HOST_AW=32`:** flat `phys = HADDR[19:0]`; fabric `HSEL` defines the aperture.
 
-Behavior must be equivalent to §3.
+Behavior must be equivalent for a given SoC map.
 
 ### 4.4 Outstanding transactions
 
@@ -652,9 +659,9 @@ Exact cycle counts depend on `CLKDIV`, dummy, SDR vs DTR, and `f_clk`.
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| 1 | 16-bit AHB-Lite RO XiP + 16-bit APB CSR | Matches CPU; separates fetch vs admin |
+| 1 | Parameterized AHB-Lite RO (`HOST_DW`/`HOST_AW` 16\|32) + 16-bit APB CSR | ZX16 default; RV32 via params; admin on APB |
 | 2 | 20-bit physical flash address | 1 MB space with 16 KB windows (6-bit page + 14-bit offset) |
-| 3 | Fixed 16 KB + paged 16 KB map | Boot resident + overlays; matches system map |
+| 3 | Fixed 16 KB + paged 16 KB map when `HOST_AW=16`; flat phys when `HOST_AW=32` | ZX16 map vs RV32 fabric aperture |
 | 4 | RO cache 16×16 B, direct-mapped, phys-tagged | Small, correct across aliases/pages |
 | 5 | No coherency protocol | RO + full phys tags + exclusive routing |
 | 6 | I/O widths = **1-1-1 and 1-4-4 only** | Minimal width set |
@@ -673,16 +680,15 @@ Exact cycle counts depend on `CLKDIV`, dummy, SDR vs DTR, and `f_clk`.
 
 ## 14. Implementation checklist
 
-- [ ] AHB-Lite RO slave + wait-state miss path  
-- [ ] Phys construction (fixed + paged) and interconnect select  
-- [ ] Cache tags/data arrays + inv  
-- [ ] **1-1-1 SDR** fill vs VIP profile  
-- [ ] **1-4-4 SDR** `0xEB` (+ mode phase / continuous optional)  
+- [x] AHB-Lite RO slave + wait-state miss path (`HOST_DW`/`HOST_AW`)  
+- [x] Phys construction (fixed + paged / flat 32-bit) and interconnect select  
+- [x] Cache tags/data arrays + inv + beat extract for 16/32  
+- [x] **1-1-1 SDR** fill vs SST26 VIP  
+- [x] **1-4-4 SDR** `0xEB` (+ mode phase / continuous optional)  
 - [ ] **1-4-4 DTR** `0xED` where profile enables  
-- [ ] Cache + AHB-Lite RO slave  
-- [ ] APB CSR + bit-bang mux  
-- [ ] TB profiles: at least **sst26** and **s28hs** (§17)  
-- [ ] Prefetch (optional phase)  
+- [x] APB CSR + bit-bang mux  
+- [x] TB: SST26 16-bit suite + AHB32 smoke  
+- [x] Prefetch (window-local)  
 
 ---
 

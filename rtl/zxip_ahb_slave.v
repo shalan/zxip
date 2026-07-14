@@ -1,65 +1,117 @@
 // SPDX-License-Identifier: Apache-2.0
-// AHB-Lite RO slave 16-bit for XiP (Verilog-2005)
+// AHB-Lite RO slave for ZXip — HOST_DW 16|32, HOST_AW 16|32 (Verilog-2005)
 `timescale 1ns / 1ps
 
-module zxip_ahb_slave (
-    input  wire        hclk,
-    input  wire        hresetn,
+module zxip_ahb_slave #(
+    parameter integer HOST_DW = 16,
+    parameter integer HOST_AW = 16
+) (
+    input  wire                   hclk,
+    input  wire                   hresetn,
 
-    input  wire [15:0] haddr,
-    input  wire [1:0]  htrans,
-    input  wire        hwrite,
-    input  wire [2:0]  hsize,
-    input  wire        hsel,
-    input  wire        hready,
-    input  wire [15:0] hwdata,
-    output reg  [15:0] hrdata,
-    output reg         hreadyout,
-    output reg         hresp,
+    input  wire [HOST_AW-1:0]     haddr,
+    input  wire [1:0]             htrans,
+    input  wire                   hwrite,
+    input  wire [2:0]             hsize,
+    input  wire                   hsel,
+    input  wire                   hready,
+    input  wire [HOST_DW-1:0]     hwdata,
+    output reg  [HOST_DW-1:0]     hrdata,
+    output reg                    hreadyout,
+    output reg                    hresp,
 
-    input  wire        xip_region,
-    input  wire [19:0] phys,
-    input  wire        xip_en,
+    input  wire                   xip_region,
+    input  wire [19:0]            phys,
+    input  wire                   xip_en,
 
-    // Cache
-    output reg         lookup_req,
-    output reg [19:0]  lookup_phys,
-    output reg         lookup_half,
-    input  wire        lookup_hit,
-    input  wire        lookup_miss,
-    input  wire [15:0] lookup_rdata,
-    input  wire        lookup_ready
+    output reg                    lookup_req,
+    output reg  [19:0]            lookup_phys,
+    output reg  [2:0]             lookup_size,
+    input  wire                   lookup_hit,
+    input  wire                   lookup_miss,
+    input  wire [HOST_DW-1:0]     lookup_rdata,
+    input  wire                   lookup_ready
 );
 
-    localparam HTRANS_IDLE   = 2'b00;
-    localparam HTRANS_BUSY   = 2'b01;
+    `include "zxip_pkg_params.vh"
+
+    // synthesis translate_off
+    initial begin
+        if (HOST_DW != 16 && HOST_DW != 32) begin
+            $display("ERROR: zxip_ahb_slave HOST_DW must be 16 or 32");
+            $finish;
+        end
+        if (HOST_AW != 16 && HOST_AW != 32) begin
+            $display("ERROR: zxip_ahb_slave HOST_AW must be 16 or 32");
+            $finish;
+        end
+    end
+    // synthesis translate_on
+
     localparam HTRANS_NONSEQ = 2'b10;
     localparam HTRANS_SEQ    = 2'b11;
 
     localparam AS_IDLE  = 2'd0;
-    localparam AS_WAIT1 = 2'd1; // ignore stale lookup_ready
+    localparam AS_WAIT1 = 2'd1;
     localparam AS_WAIT2 = 2'd2;
     localparam AS_ERROR = 2'd3;
 
     reg [1:0] astate;
-    reg       pend_write_err;
-    reg       a_half;   // 1 = halfword (or larger) access
-    reg       a_addr0;  // HADDR[0] for byte-lane placement
+    reg [2:0] a_size;
+    reg [1:0] a_lane;
 
-    wire xfer = hsel & hready & hreadyout & ((htrans == HTRANS_NONSEQ) || (htrans == HTRANS_SEQ));
+    wire xfer = hsel & hready & hreadyout &
+                ((htrans == HTRANS_NONSEQ) || (htrans == HTRANS_SEQ));
+
+    wire [2:0] size_eff =
+        (HOST_DW < 32 && hsize >= `XIP_HSIZE_WORD) ? `XIP_HSIZE_HALF : hsize;
+
+    wire unaligned =
+        (size_eff == `XIP_HSIZE_HALF && haddr[0]) ||
+        (size_eff == `XIP_HSIZE_WORD && (haddr[1:0] != 2'b00));
+
+    // Build HRDATA from lookup_rdata (little-endian lane place)
+    reg [HOST_DW-1:0] beat_placed;
+    always @* begin
+        beat_placed = {HOST_DW{1'b0}};
+        if (HOST_DW == 16) begin
+            if (a_size == `XIP_HSIZE_BYTE) begin
+                if (a_lane[0])
+                    beat_placed = {lookup_rdata[7:0], 8'h00};
+                else
+                    beat_placed = {8'h00, lookup_rdata[7:0]};
+            end else
+                beat_placed = lookup_rdata;
+        end else begin
+            // HOST_DW == 32
+            if (a_size == `XIP_HSIZE_BYTE) begin
+                case (a_lane)
+                    2'b00: beat_placed = {24'h0, lookup_rdata[7:0]};
+                    2'b01: beat_placed = {16'h0, lookup_rdata[7:0], 8'h0};
+                    2'b10: beat_placed = {8'h0, lookup_rdata[7:0], 16'h0};
+                    2'b11: beat_placed = {lookup_rdata[7:0], 24'h0};
+                endcase
+            end else if (a_size == `XIP_HSIZE_HALF) begin
+                if (a_lane[1])
+                    beat_placed = {lookup_rdata[15:0], 16'h0};
+                else
+                    beat_placed = {16'h0, lookup_rdata[15:0]};
+            end else
+                beat_placed = lookup_rdata;
+        end
+    end
 
     always @(posedge hclk or negedge hresetn) begin
         if (!hresetn) begin
-            hrdata         <= 16'h0;
-            hreadyout      <= 1'b1;
-            hresp          <= 1'b0;
-            lookup_req     <= 1'b0;
-            lookup_phys    <= 20'h0;
-            lookup_half    <= 1'b1;
-            astate         <= AS_IDLE;
-            pend_write_err <= 1'b0;
-            a_half         <= 1'b1;
-            a_addr0        <= 1'b0;
+            hrdata      <= {HOST_DW{1'b0}};
+            hreadyout   <= 1'b1;
+            hresp       <= 1'b0;
+            lookup_req  <= 1'b0;
+            lookup_phys <= 20'h0;
+            lookup_size <= 3'b001;
+            astate      <= AS_IDLE;
+            a_size      <= 3'b001;
+            a_lane      <= 2'b00;
         end else begin
             lookup_req <= 1'b0;
 
@@ -69,27 +121,23 @@ module zxip_ahb_slave (
                     hresp     <= 1'b0;
                     if (xfer) begin
                         if (!xip_region || !xip_en) begin
-                            // Not for us or disabled — OK zero (or let decoder not select)
-                            hrdata <= 16'h0;
-                        end else if (hwrite) begin
-                            // ERROR response: two-cycle AHB error
-                            hreadyout      <= 1'b0;
-                            hresp          <= 1'b1;
-                            pend_write_err <= 1'b1;
-                            astate         <= AS_ERROR;
+                            hrdata <= {HOST_DW{1'b0}};
+                        end else if (hwrite || unaligned) begin
+                            hreadyout <= 1'b0;
+                            hresp     <= 1'b1;
+                            astate    <= AS_ERROR;
                         end else begin
                             lookup_req  <= 1'b1;
                             lookup_phys <= phys;
-                            lookup_half <= (hsize >= 3'b001); // halfword or larger as half
-                            a_half      <= (hsize >= 3'b001);
-                            a_addr0     <= haddr[0];
+                            lookup_size <= size_eff;
+                            a_size      <= size_eff;
+                            a_lane      <= haddr[1:0];
                             hreadyout   <= 1'b0;
                             astate      <= AS_WAIT1;
                         end
                     end
                 end
 
-                // Drop any sticky ready from previous access
                 AS_WAIT1: begin
                     hreadyout  <= 1'b0;
                     hresp      <= 1'b0;
@@ -101,29 +149,23 @@ module zxip_ahb_slave (
                     hreadyout <= 1'b0;
                     hresp     <= 1'b0;
                     if (lookup_ready) begin
-                        // Cache returns byte in [7:0]; AHB needs correct byte lane.
-                        if (a_half)
-                            hrdata = lookup_rdata;
-                        else if (a_addr0)
-                            hrdata = {lookup_rdata[7:0], 8'h00};
-                        else
-                            hrdata = {8'h00, lookup_rdata[7:0]};
+                        hrdata    <= beat_placed;
                         hreadyout <= 1'b1;
                         astate    <= AS_IDLE;
                     end
                 end
 
                 AS_ERROR: begin
-                    // Second cycle of ERROR with HREADY=1
                     hresp     <= 1'b1;
                     hreadyout <= 1'b1;
                     astate    <= AS_IDLE;
-                    pend_write_err <= 1'b0;
                 end
 
                 default: astate <= AS_IDLE;
             endcase
         end
     end
+
+    wire _uw = |hwdata | lookup_hit | lookup_miss;
 
 endmodule

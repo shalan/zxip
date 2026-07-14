@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// XiP shared constants (macros for portable `include)
+// ZXip shared constants (macros for portable `include)
 //
-// Cache geometry is compile-time selectable (override with +define+ / -D):
+// Cache geometry (override with +define+ / -D):
 //   XIP_CACHE_LINES  : 8 or 16  (default 16)
 //   XIP_LINE_BYTES   : 8 or 16  (default 16)
-// Capacity = LINES * LINE_BYTES  →  64 / 128 / 128 / 256 B
+//
+// Host AHB is set via module parameters HOST_DW / HOST_AW on zxip_top
+// (defaults 16/16). Macros below remain for compile-time cache geometry.
 //
 `ifndef XIP_PKG_PARAMS_VH
 `define XIP_PKG_PARAMS_VH
@@ -17,7 +19,6 @@
 `define XIP_LINE_BYTES  16
 `endif
 
-// Sanity: only 8/16 supported for both knobs
 `ifndef XIP_LINE_BITS
 `define XIP_LINE_BITS   (`XIP_LINE_BYTES * 8)
 `endif
@@ -45,5 +46,10 @@
 `define XIP_REG_BB_CTRL   8'h10
 `define XIP_REG_BB_IO     8'h12
 `define XIP_REG_DTR_PHY   8'h14
+
+// AHB HSIZE encodings
+`define XIP_HSIZE_BYTE  3'b000
+`define XIP_HSIZE_HALF  3'b001
+`define XIP_HSIZE_WORD  3'b010
 
 `endif

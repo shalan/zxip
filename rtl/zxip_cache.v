@@ -1,25 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 // RO direct-mapped cache, phys-tagged + next-line prefetch (Verilog-2005)
 // Geometry: XIP_CACHE_LINES (8|16) x XIP_LINE_BYTES (8|16)
+// Host beat width: HOST_DW 16|32 (parameter)
 `timescale 1ns / 1ps
 
-module zxip_cache (
+module zxip_cache #(
+    parameter integer HOST_DW = 16
+) (
     input  wire        clk,
     input  wire        rst_n,
 
     input  wire        inv_all,
-    input  wire        prefetch_en,    // 1 = allow next-line prefetch
+    input  wire        prefetch_en,
 
-    // Lookup / access
     input  wire        lookup_req,
     input  wire [19:0] lookup_phys,
-    input  wire        lookup_half,
+    // AHB HSIZE: 000=byte, 001=half, 010=word (word only if HOST_DW>=32)
+    input  wire [2:0]  lookup_size,
     output reg         lookup_hit,
     output reg         lookup_miss,
-    output reg [15:0]  lookup_rdata,
+    output reg [HOST_DW-1:0] lookup_rdata,
     output reg         lookup_ready,
 
-    // Fill interface (bus is 128b; only [LINE_BITS-1:0] is used)
     output reg         fill_req,
     output reg [19:0]  fill_phys,
     input  wire        fill_busy,
@@ -30,15 +32,26 @@ module zxip_cache (
 
     `include "zxip_pkg_params.vh"
 
-    // ---- Geometry (compile-time) ----
     localparam integer NUM_LINES  = `XIP_CACHE_LINES;
     localparam integer LINE_BYTES = `XIP_LINE_BYTES;
     localparam integer LINE_BITS  = LINE_BYTES * 8;
     localparam integer OFF_W      = (LINE_BYTES == 16) ? 4 : 3;
     localparam integer IDX_W      = (NUM_LINES  == 16) ? 4 : 3;
     localparam integer TAG_W      = 20 - OFF_W - IDX_W;
-    // Last line index within a 16 KB window (offset[13:0] >> OFF_W)
     localparam [13:0]  LAST_LINE_IN_WIN = (14'h3FFF >> OFF_W);
+
+    // synthesis translate_off
+    initial begin
+        if (HOST_DW != 16 && HOST_DW != 32) begin
+            $display("ERROR: zxip_cache HOST_DW must be 16 or 32 (got %0d)", HOST_DW);
+            $finish;
+        end
+        if (HOST_DW == 32 && LINE_BYTES < 4) begin
+            $display("ERROR: zxip_cache HOST_DW=32 needs LINE_BYTES >= 4");
+            $finish;
+        end
+    end
+    // synthesis translate_on
 
     reg                valid [0:NUM_LINES-1];
     reg [TAG_W-1:0]    tag   [0:NUM_LINES-1];
@@ -61,22 +74,19 @@ module zxip_cache (
 
     reg [2:0]          cstate;
     reg [19:0]         pend_phys;
-    reg                pend_half;
+    reg [2:0]          pend_size;
     reg [IDX_W-1:0]    pend_idx;
     reg [TAG_W-1:0]    pend_tag;
     reg [OFF_W-1:0]    pend_off;
-    reg [15:0]         pend_rdata;
+    reg [HOST_DW-1:0]  pend_rdata;
 
-    // Prefetch
     reg                pf_pending;
     reg [19:0]         pf_phys;
     reg                demand_fill;
-    // Demand arrived during prefetch fill
     reg                dem_hold;
     reg [19:0]         dem_phys;
-    reg                dem_half;
+    reg [2:0]          dem_size;
 
-    // Combinational decode helpers for held demand / prefetch phys
     wire [IDX_W-1:0] dem_idx = dem_phys[OFF_W +: IDX_W];
     wire [TAG_W-1:0] dem_tag = dem_phys[19 : (OFF_W+IDX_W)];
     wire [OFF_W-1:0] dem_off = dem_phys[OFF_W-1:0];
@@ -85,25 +95,33 @@ module zxip_cache (
     wire [IDX_W-1:0] pf_idx  = pf_phys[OFF_W +: IDX_W];
     wire [TAG_W-1:0] pf_tag  = pf_phys[19 : (OFF_W+IDX_W)];
 
-    function [15:0] extract_half;
+    // Little-endian extract; size = HSIZE
+    function [HOST_DW-1:0] extract_beat;
         input [LINE_BITS-1:0] line;
         input [OFF_W-1:0]     byte_off;
+        input [2:0]           size;
         reg   [OFF_W-1:0]     bo;
+        reg   [31:0]          w32;
         begin
-            bo = {byte_off[OFF_W-1:1], 1'b0};
-            extract_half = {line[(bo+1)*8 +: 8], line[bo*8 +: 8]};
+            extract_beat = {HOST_DW{1'b0}};
+            if (size == `XIP_HSIZE_BYTE) begin
+                extract_beat[7:0] = line[byte_off*8 +: 8];
+            end else if (size == `XIP_HSIZE_HALF) begin
+                bo = {byte_off[OFF_W-1:1], 1'b0};
+                extract_beat[15:0] = {line[(bo+1)*8 +: 8], line[bo*8 +: 8]};
+            end else begin
+                // word (or treat larger as word when HOST_DW>=32)
+                bo = {byte_off[OFF_W-1:2], 2'b00};
+                w32 = {line[(bo+3)*8 +: 8], line[(bo+2)*8 +: 8],
+                       line[(bo+1)*8 +: 8], line[bo*8 +: 8]};
+                if (HOST_DW >= 32)
+                    extract_beat = w32[HOST_DW-1:0];
+                else
+                    extract_beat[15:0] = w32[15:0];
+            end
         end
     endfunction
 
-    function [15:0] extract_byte_as_half;
-        input [LINE_BITS-1:0] line;
-        input [OFF_W-1:0]     byte_off;
-        begin
-            extract_byte_as_half = {8'h00, line[byte_off*8 +: 8]};
-        end
-    endfunction
-
-    // Next line stays inside same 16 KB window (phys[13:0] offset)
     function automatic in_window_next;
         input [19:0] base;
         reg   [13:0] li;
@@ -135,22 +153,22 @@ module zxip_cache (
             cstate       <= CS_IDLE;
             lookup_hit   <= 1'b0;
             lookup_miss  <= 1'b0;
-            lookup_rdata <= 16'h0;
+            lookup_rdata <= {HOST_DW{1'b0}};
             lookup_ready <= 1'b0;
             fill_req     <= 1'b0;
             fill_phys    <= 20'h0;
             pend_phys    <= 20'h0;
-            pend_half    <= 1'b1;
+            pend_size    <= 3'b001;
             pend_idx     <= {IDX_W{1'b0}};
             pend_tag     <= {TAG_W{1'b0}};
             pend_off     <= {OFF_W{1'b0}};
-            pend_rdata   <= 16'h0;
+            pend_rdata   <= {HOST_DW{1'b0}};
             pf_pending   <= 1'b0;
             pf_phys      <= 20'h0;
             demand_fill  <= 1'b0;
             dem_hold     <= 1'b0;
             dem_phys     <= 20'h0;
-            dem_half     <= 1'b1;
+            dem_size     <= 3'b001;
         end else begin
             lookup_hit  <= 1'b0;
             lookup_miss <= 1'b0;
@@ -167,14 +185,10 @@ module zxip_cache (
                 CS_IDLE: begin
                     if (lookup_req || dem_hold) begin
                         lookup_ready <= 1'b0;
-                        // Use held demand if any
                         if (dem_hold) begin
                             if (valid[dem_idx] && tag[dem_idx] == dem_tag) begin
                                 lookup_hit <= 1'b1;
-                                if (dem_half)
-                                    pend_rdata <= extract_half(data[dem_idx], dem_off);
-                                else
-                                    pend_rdata <= extract_byte_as_half(data[dem_idx], dem_off);
+                                pend_rdata <= extract_beat(data[dem_idx], dem_off, dem_size);
                                 dem_hold <= 1'b0;
                                 if (prefetch_en && in_window_next(dem_base)) begin
                                     pf_phys    <= dem_base + LINE_BYTES;
@@ -184,7 +198,7 @@ module zxip_cache (
                             end else begin
                                 lookup_miss  <= 1'b1;
                                 pend_phys    <= dem_phys;
-                                pend_half    <= dem_half;
+                                pend_size    <= dem_size;
                                 pend_idx     <= dem_idx;
                                 pend_tag     <= dem_tag;
                                 pend_off     <= dem_off;
@@ -197,10 +211,7 @@ module zxip_cache (
                             end
                         end else if (valid[idx] && tag[idx] == tag_w) begin
                             lookup_hit <= 1'b1;
-                            if (lookup_half)
-                                pend_rdata <= extract_half(data[idx], off);
-                            else
-                                pend_rdata <= extract_byte_as_half(data[idx], off);
+                            pend_rdata <= extract_beat(data[idx], off, lookup_size);
                             if (can_pf) begin
                                 pf_pending <= 1'b1;
                                 pf_phys    <= next_line;
@@ -209,7 +220,7 @@ module zxip_cache (
                         end else begin
                             lookup_miss  <= 1'b1;
                             pend_phys    <= lookup_phys;
-                            pend_half    <= lookup_half;
+                            pend_size    <= lookup_size;
                             pend_idx     <= idx;
                             pend_tag     <= tag_w;
                             pend_off     <= off;
@@ -243,17 +254,14 @@ module zxip_cache (
                             valid[pend_idx] <= 1'b1;
                             tag[pend_idx]   <= pend_tag;
                             data[pend_idx]  <= fill_line[LINE_BITS-1:0];
-                            if (pend_half)
-                                pend_rdata <= extract_half(fill_line[LINE_BITS-1:0], pend_off);
-                            else
-                                pend_rdata <= extract_byte_as_half(fill_line[LINE_BITS-1:0], pend_off);
-                            // Queue next-line prefetch after demand miss fill
+                            pend_rdata <= extract_beat(fill_line[LINE_BITS-1:0], pend_off, pend_size);
                             if (prefetch_en && in_window_next({pend_phys[19:OFF_W], {OFF_W{1'b0}}})) begin
                                 pf_phys    <= {pend_phys[19:OFF_W], {OFF_W{1'b0}}} + LINE_BYTES;
                                 pf_pending <= 1'b1;
                             end
                         end else begin
-                            pend_rdata <= 16'hDEAD;
+                            // sticky error pattern in low halfword
+                            pend_rdata <= {{HOST_DW-16{1'b0}}, 16'hDEAD};
                         end
                         cstate <= CS_REPLY;
                     end
@@ -273,7 +281,7 @@ module zxip_cache (
                     if (lookup_req) begin
                         dem_hold     <= 1'b1;
                         dem_phys     <= lookup_phys;
-                        dem_half     <= lookup_half;
+                        dem_size     <= lookup_size;
                         lookup_ready <= 1'b0;
                     end
                     if (fill_busy || fill_done) begin
@@ -289,7 +297,7 @@ module zxip_cache (
                     if (lookup_req) begin
                         dem_hold     <= 1'b1;
                         dem_phys     <= lookup_phys;
-                        dem_half     <= lookup_half;
+                        dem_size     <= lookup_size;
                         lookup_ready <= 1'b0;
                     end
                     if (fill_done) begin

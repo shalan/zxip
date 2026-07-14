@@ -8,14 +8,16 @@ device bring-up (e.g. program, status, mode switch).
 
 | | |
 |--|--|
-| Host bus (v1) | **16-bit AHB-Lite** RO slave + **16-bit APB** CSRs |
+| Host bus | **AHB-Lite** RO slave, **`HOST_DW` = 16 (default) or 32**, **`HOST_AW` = 16 or 32** |
+| CSRs | **16-bit APB** |
 | Flash | SPI 1-1-1 (`0x0B` / `0x03`) and QSPI 1-4-4 (`0xEB`) |
 | Cache | Parameterized lines × bytes (8/16 × 8/16), default 16×16 B |
 | RTL | IEEE Verilog-2005 |
 | License | Apache-2.0 |
 
-**Roadmap:** parameterized **32-bit AHB** host port for RV32 integration.  
-**SoC integration:** ZX16 sample SoC lives in the [zx16](https://github.com/shalan/zx16) tree (consumer of this IP), not in this repo.
+**RV32:** instantiate `zxip_top #(.HOST_DW(32), .HOST_AW(32))`. Flat phys uses `HADDR[19:0]` when `phys_valid=0` (fabric `HSEL` defines the aperture).  
+**ZX16 / 16-bit:** leave defaults (`HOST_DW=16`, `HOST_AW=16`) with the fixed/paged window decode.  
+**SoC integration:** sample MCUs (e.g. [zx16](https://github.com/shalan/zx16)) consume this IP; they are not in this repo.
 
 ## Layout
 
@@ -37,11 +39,13 @@ Top module: **`zxip_top`**.
 Requires `iverilog` and `vvp`.
 
 ```bash
-./tb/scripts/run_sst26_iverilog.sh          # default 16×16 cache
-./tb/scripts/run_sst26_iverilog.sh 8 16     # 8 lines × 16 B
+./tb/scripts/run_sst26_iverilog.sh          # 16-bit host, 16×16 cache
+LINES=8 BYTES=16 ./tb/scripts/run_sst26_iverilog.sh
+./tb/scripts/run_ahb32_iverilog.sh          # 32-bit host smoke (RV32-style)
 ```
 
-Covers SPI baseline, SPI↔QSPI, continuous mode, bit-bang program, AHB write ERROR, prefetch.
+16-bit suite: SPI baseline, SPI↔QSPI, continuous mode, bit-bang program, AHB write ERROR, prefetch.  
+32-bit suite: word/half reads, SPI+QSPI, unaligned-word ERROR.
 
 ## Documentation
 

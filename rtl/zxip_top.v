@@ -1,31 +1,42 @@
 // SPDX-License-Identifier: Apache-2.0
-// XiP QSPI flash controller top — Verilog-2005
+// ZXip QSPI flash controller top — Verilog-2005
+//
+// Parameters:
+//   HOST_DW : AHB data width 16 (default) or 32 (RV32)
+//   HOST_AW : AHB address width 16 (default) or 32
+//
+// When HOST_AW==16: fixed/paged window decode on HADDR[15:14] (legacy map).
+// When HOST_AW==32: flat phys = HADDR[19:0] unless phys_valid supplies phys_i;
+//                   fabric HSEL defines the flash aperture.
 `timescale 1ns / 1ps
 
-module zxip_top (
+module zxip_top #(
+    parameter integer HOST_DW = 16,
+    parameter integer HOST_AW = 16
+) (
     input  wire        hclk,
     input  wire        hresetn,
     input  wire        pclk,
     input  wire        presetn,
 
-    input  wire [15:0] haddr,
-    input  wire [ 1:0] htrans,
+    input  wire [HOST_AW-1:0] haddr,
+    input  wire [1:0]  htrans,
     input  wire        hwrite,
-    input  wire [ 2:0] hsize,
+    input  wire [2:0]  hsize,
     input  wire        hsel,
     input  wire        hready,
-    input  wire [15:0] hwdata,
-    output wire [15:0] hrdata,
+    input  wire [HOST_DW-1:0] hwdata,
+    output wire [HOST_DW-1:0] hrdata,
     output wire        hreadyout,
     output wire        hresp,
 
     input  wire        phys_valid,
     input  wire [19:0] phys_i,
-    input  wire [ 5:0] fixed_page,
-    input  wire [ 5:0] page_sel,
+    input  wire [5:0]  fixed_page,
+    input  wire [5:0]  page_sel,
     input  wire        page_is_flash,
 
-    input  wire [ 7:0] paddr,
+    input  wire [7:0]  paddr,
     input  wire        psel,
     input  wire        penable,
     input  wire        pwrite,
@@ -46,21 +57,41 @@ module zxip_top (
 
     `include "zxip_pkg_params.vh"
 
+    // synthesis translate_off
+    initial begin
+        if (HOST_DW != 16 && HOST_DW != 32) begin
+            $display("ERROR: zxip_top HOST_DW must be 16 or 32 (got %0d)", HOST_DW);
+            $finish;
+        end
+        if (HOST_AW != 16 && HOST_AW != 32) begin
+            $display("ERROR: zxip_top HOST_AW must be 16 or 32 (got %0d)", HOST_AW);
+            $finish;
+        end
+    end
+    // synthesis translate_on
+
     // -----------------------------------------------------------------
     // Physical address
-    // Prefer CSR FIXED_PAGE when using internal decode; pin still available
     // -----------------------------------------------------------------
     wire [5:0] fixed_page_csr;
-    wire [5:0] fixed_page_use = fixed_page_csr; // CSR owns fixed page; pin kept for SoC override later
+    wire [5:0] fixed_page_use = fixed_page_csr;
 
     wire in_fixed = (haddr[15:14] == 2'b00);
     wire in_paged = (haddr[15:14] == 2'b10);
-    wire [19:0] phys_dec =
+
+    wire [19:0] phys_dec_16 =
         in_fixed ? {fixed_page_use, haddr[13:0]} :
         (in_paged && page_is_flash) ? {page_sel, haddr[13:0]} :
         20'h0;
-    wire [19:0] phys = phys_valid ? phys_i : phys_dec;
-    wire        xip_region = phys_valid ? 1'b1 : (in_fixed | (in_paged & page_is_flash));
+
+    // 32-bit: flat low 1 MB of HADDR unless external phys_i
+    wire [19:0] phys_dec_32 = haddr[19:0];
+
+    wire [19:0] phys_dec = (HOST_AW <= 16) ? phys_dec_16 : phys_dec_32;
+    wire [19:0] phys     = phys_valid ? phys_i : phys_dec;
+    wire        xip_region = phys_valid ? 1'b1 :
+                             (HOST_AW <= 16) ? (in_fixed | (in_paged & page_is_flash)) :
+                             1'b1; // fabric HSEL bounds the aperture
 
     // -----------------------------------------------------------------
     // CSR
@@ -141,9 +172,10 @@ module zxip_top (
     // -----------------------------------------------------------------
     // Cache + fill + phy
     // -----------------------------------------------------------------
-    wire        lookup_req, lookup_half, lookup_hit, lookup_miss, lookup_ready;
+    wire        lookup_req, lookup_hit, lookup_miss, lookup_ready;
+    wire [2:0]  lookup_size;
     wire [19:0] lookup_phys;
-    wire [15:0] lookup_rdata;
+    wire [HOST_DW-1:0] lookup_rdata;
     wire        c_fill_req;
     wire [19:0] c_fill_phys;
     wire [127:0] fill_line;
@@ -153,14 +185,16 @@ module zxip_top (
     wire [2:0]  eng_io_out;
     wire        sck_rise, sck_fall, sck_level;
 
-    zxip_cache u_cache (
+    zxip_cache #(
+        .HOST_DW(HOST_DW)
+    ) u_cache (
         .clk          (hclk),
         .rst_n        (eng_rst_n),
         .inv_all      (cache_inv_pulse | soft_rst_pulse),
         .prefetch_en  (prefetch_en),
         .lookup_req   (lookup_req),
         .lookup_phys  (lookup_phys),
-        .lookup_half  (lookup_half),
+        .lookup_size  (lookup_size),
         .lookup_hit   (lookup_hit),
         .lookup_miss  (lookup_miss),
         .lookup_rdata (lookup_rdata),
@@ -242,7 +276,10 @@ module zxip_top (
         .io_in       (io_in)
     );
 
-    zxip_ahb_slave u_ahb (
+    zxip_ahb_slave #(
+        .HOST_DW(HOST_DW),
+        .HOST_AW(HOST_AW)
+    ) u_ahb (
         .hclk         (hclk),
         .hresetn      (hresetn),
         .haddr        (haddr),
@@ -260,7 +297,7 @@ module zxip_top (
         .xip_en       (xip_en),
         .lookup_req   (lookup_req),
         .lookup_phys  (lookup_phys),
-        .lookup_half  (lookup_half),
+        .lookup_size  (lookup_size),
         .lookup_hit   (lookup_hit),
         .lookup_miss  (lookup_miss),
         .lookup_rdata (lookup_rdata),
