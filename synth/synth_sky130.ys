@@ -1,0 +1,67 @@
+# Flattened sky130 HD synthesis
+# - Write UNMAPPED netlist (generic gates) for functional verification
+# - Map with SS liberty for STA (cell names shared across TT/SS/FF)
+#
+# ABC delay target is in PICOSECONDS (yosys help abc: -D <picoseconds>).
+#   10 ns period  →  -D 10000
+# Use -constr so the default/custom script runs buffer / upsize / dnsize.
+# OpenSTA + SDC remain authoritative for real timing.
+#
+# Run from repo root:
+#   yosys -l synth/synth_sky130.log -s synth/synth_sky130.ys
+
+# ---- Read design ----
+read_verilog -I rtl \
+  rtl/zxip_apb_regs.v \
+  rtl/zxip_phy.v \
+  rtl/zxip_fill_fsm.v \
+  rtl/zxip_cache.v \
+  rtl/zxip_ahb_slave.v \
+  rtl/zxip_top.v
+
+hierarchy -check -top zxip_top
+
+# Flatten entire hierarchy into zxip_top
+flatten
+opt_clean
+
+# Elaborate behavioral RTL
+proc
+opt
+fsm
+opt
+memory
+opt -purge
+
+# Map to generic gate-level ($and / $_AND_ / $_DFF_ ...)
+techmap
+opt
+clean
+
+# ========== UNMAPPED netlist for verification ==========
+# Simulate with Yosys simcells.v / simlib.v (see tb/tb_xip_unmapped.v)
+write_verilog -noattr -noexpr synth/zxip_top_unmapped.v
+write_json synth/zxip_top_unmapped.json
+stat
+
+# ========== Technology mapping (SS for mapping; STA multi-corner later) ==========
+read_liberty -lib sky130/hd_120e_ss.lib
+
+dfflibmap -liberty sky130/hd_120e_ss.lib
+opt
+
+# 10 ns clock → 10000 ps. Soft ABC target only; STA is authoritative.
+# -constr enables buffer + upsize/dnsize sizing pass in the script.
+abc -liberty sky130/hd_120e_ss.lib \
+    -constr synth/abc_sky130.constr \
+    -D 10000 \
+    -script synth/abc_map.script
+
+clean
+opt
+stat -liberty sky130/hd_120e_ss.lib
+
+# Mapped netlist (cell names valid for TT/SS/FF libs)
+write_verilog -noattr -noexpr synth/zxip_top_sky130.v
+write_json synth/zxip_top_sky130.json
+write_blif synth/zxip_top_sky130.blif

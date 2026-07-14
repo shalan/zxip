@@ -1,0 +1,27 @@
+# Custom ABC script for delay-aware sky130 mapping.
+# {D} is substituted by yosys from `abc -D <picoseconds>`.
+#
+# Flow:
+#   1) AIG cleanup / fraig / scorr
+#   2) Delay-aware retime toward period
+#   3) choice + &nf map under delay target
+#   4) buffer tree + upsize / dnsize (needs -constr)
+#   5) report ABC's internal timing (stime)
+
+strash
+&get -n
+&fraig -x
+&put
+scorr
+dc2
+dretime
+retime -o {D}
+strash
+&get -n
+&dch -f
+&nf {D}
+&put
+buffer
+upsize {D}
+dnsize {D}
+stime -p

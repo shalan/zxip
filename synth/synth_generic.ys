@@ -1,0 +1,26 @@
+# Yosys generic synthesis (no technology / cell-library mapping)
+# Run from repo root:
+#   yosys -l synth/synth_generic.log -s synth/synth_generic.ys
+
+read_verilog -I rtl \
+  rtl/zxip_apb_regs.v \
+  rtl/zxip_phy.v \
+  rtl/zxip_fill_fsm.v \
+  rtl/zxip_cache.v \
+  rtl/zxip_ahb_slave.v \
+  rtl/zxip_top.v
+
+hierarchy -check -top zxip_top
+
+proc
+opt
+fsm
+opt
+memory
+opt -purge
+opt_clean
+
+stat
+
+write_verilog -noattr -noexpr synth/zxip_top_generic.v
+write_json synth/zxip_top_generic.json

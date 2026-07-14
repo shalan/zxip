@@ -1,0 +1,51 @@
+# Yosys synthesis to sky130_fd_sc_hd (slow corner liberty: hd_120e_ss.lib)
+# Run from repo root:
+#   yosys -l synth/synth_sky130_ss.log -s synth/synth_sky130_ss.ys
+
+# ---- Read design ----
+read_verilog -I rtl \
+  rtl/zxip_apb_regs.v \
+  rtl/zxip_phy.v \
+  rtl/zxip_fill_fsm.v \
+  rtl/zxip_cache.v \
+  rtl/zxip_ahb_slave.v \
+  rtl/zxip_top.v
+
+hierarchy -check -top zxip_top
+
+# Flatten for cleaner STA cone; keep hierarchy optional via comment
+# hierarchy -generate
+proc
+opt
+fsm
+opt
+memory
+opt -purge
+
+# Map generic cells / memories
+techmap
+opt
+
+# Liberty (SS / slow)
+read_liberty -lib sky130/hd_120e_ss.lib
+
+# Sequential mapping
+dfflibmap -liberty sky130/hd_120e_ss.lib
+opt
+
+# Combinational mapping + area/delay optimize
+# -D is picoseconds (not ns). 10 ns → 10000 ps. STA is authoritative.
+abc -liberty sky130/hd_120e_ss.lib \
+    -constr synth/abc_sky130.constr \
+    -D 10000 \
+    -script synth/abc_map.script
+
+# Cleanup
+clean
+opt
+stat -liberty sky130/hd_120e_ss.lib
+
+# Outputs for OpenSTA
+write_verilog -noattr -noexpr synth/zxip_top_sky130_ss.v
+write_json synth/zxip_top_sky130_ss.json
+write_blif synth/zxip_top_sky130_ss.blif

@@ -1,0 +1,25 @@
+# Simulation
+sim/
+*.vcd
+*.fst
+*.lxt*
+
+# Synthesis / STA outputs
+synth/*.v
+synth/*.json
+synth/*.blif
+synth/*.log
+synth/out/
+sta/reports/
+sta/*.log
+
+# Editor / OS
+.DS_Store
+*~
+*.swp
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc

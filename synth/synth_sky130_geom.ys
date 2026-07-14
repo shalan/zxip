@@ -1,0 +1,55 @@
+# Parameterized sky130 HD synth for cache geometry comparison.
+# Invoke from repo root with Yosys -D macros and env-selected outputs via
+# tb/scripts or:
+#   yosys -D XIP_CACHE_LINES=8 -D XIP_LINE_BYTES=8 \
+#         -l synth/logs/L8_B8.log -s synth/synth_sky130_geom.ys
+#
+# Before running, set TCL-like substitutes by writing OUT_PREFIX via:
+#   The script writes to synth/out/$OUTNAME which must be pre-created
+#   by the driver (see run_geom_ss_12ns.sh). Fallback names below.
+
+# ---- Read design (macros from yosys -D) ----
+read_verilog -I rtl \
+  rtl/zxip_apb_regs.v \
+  rtl/zxip_phy.v \
+  rtl/zxip_fill_fsm.v \
+  rtl/zxip_cache.v \
+  rtl/zxip_ahb_slave.v \
+  rtl/zxip_top.v
+
+hierarchy -check -top zxip_top
+flatten
+opt_clean
+
+proc
+opt
+fsm
+opt
+memory
+opt -purge
+
+techmap
+opt
+clean
+
+read_liberty -lib sky130/hd_120e_ss.lib
+dfflibmap -liberty sky130/hd_120e_ss.lib
+opt
+
+# 12 ns period → 12000 ps ABC target
+abc -liberty sky130/hd_120e_ss.lib \
+    -constr synth/abc_sky130.constr \
+    -D 12000 \
+    -script synth/abc_map.script
+
+clean
+opt
+stat -liberty sky130/hd_120e_ss.lib
+
+# OUT_STEM is set by driver via chdir/copy; default:
+# Driver passes -p "tee -o ..." or we use fixed paths per run.
+# Write to stem provided by environment file:
+# shell: export OUT_STEM=synth/out/L8_B8
+# yosys doesn't expand env in write_verilog easily — driver rewrites this.
+write_verilog -noattr -noexpr synth/out/_geom_last.v
+write_json synth/out/_geom_last.json
