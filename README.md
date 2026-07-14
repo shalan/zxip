@@ -21,7 +21,7 @@ device bring-up (e.g. program, status, mode switch).
 
 ```
 rtl/           # zxip_top + cache, fill FSM, PHY, AHB/APB
-tb/            # SST26 / unmapped / S28HS co-sim
+tb/            # SST26 + unmapped co-sim
 synth/         # Yosys + sky130 scripts
 sta/           # OpenSTA constraints / runners
 sky130/        # Liberty for map/STA
