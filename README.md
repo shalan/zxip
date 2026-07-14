@@ -17,7 +17,7 @@ device bring-up (e.g. program, status, mode switch).
 
 **RV32:** instantiate `zxip_top #(.HOST_DW(32), .HOST_AW(32))`. Flat phys uses `HADDR[19:0]` when `phys_valid=0` (fabric `HSEL` defines the aperture).  
 **ZX16 / 16-bit:** leave defaults (`HOST_DW=16`, `HOST_AW=16`) with the fixed/paged window decode.  
-**SoC integration:** sample MCUs (e.g. [zx16](https://github.com/shalan/zx16)) consume this IP; they are not in this repo.
+**SoC integration:** [zx16-soc](https://github.com/shalan/zx16-soc) (ZX16 + this IP + SRAM/UART/timer); CPU/ISA: [zx16](https://github.com/shalan/zx16).
 
 ## Layout
 
