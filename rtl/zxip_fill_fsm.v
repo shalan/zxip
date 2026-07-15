@@ -2,6 +2,7 @@
 // Flash line-fill engine: 1-1-1 (0x0B/0x03) + 1-4-4 (0xEB, mode, continuous)
 // Verilog-2005
 `timescale 1ns / 1ps
+`include "zxip_pkg_params.vh"
 
 module zxip_fill_fsm (
     input  wire        clk,
@@ -24,7 +25,7 @@ module zxip_fill_fsm (
     input  wire [19:0] fill_phys,
     output reg         fill_busy,
     output reg         fill_done,
-    output reg [127:0] fill_line,
+    output reg [`XIP_FILL_BUS_W-1:0] fill_line,
     output reg         fill_err,
     output reg         cont_active,
 
@@ -41,8 +42,6 @@ module zxip_fill_fsm (
     output reg         eng_io3_oe,
     output reg [2:0]   eng_io_out
 );
-
-    `include "zxip_pkg_params.vh"
 
     localparam integer LINE_BYTES = `XIP_LINE_BYTES;
     localparam integer LINE_BITS  = LINE_BYTES * 8;
@@ -84,7 +83,7 @@ module zxip_fill_fsm (
             state        <= ST_IDLE;
             fill_busy    <= 1'b0;
             fill_done    <= 1'b0;
-            fill_line    <= {128{1'b0}};
+            fill_line    <= {`XIP_FILL_BUS_W{1'b0}};
             fill_err     <= 1'b0;
             cont_active  <= 1'b0;
             eng_active   <= 1'b0;

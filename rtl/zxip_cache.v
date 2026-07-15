@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // RO direct-mapped cache, phys-tagged + next-line prefetch (Verilog-2005)
-// Geometry: XIP_CACHE_LINES (8|16) x XIP_LINE_BYTES (8|16)
+// Geometry: XIP_CACHE_LINES (8|16|32) x XIP_LINE_BYTES (8|16|32)
 // Host beat width: HOST_DW 16|32 (parameter)
 `timescale 1ns / 1ps
+`include "zxip_pkg_params.vh"
 
 module zxip_cache #(
     parameter integer HOST_DW = 16
@@ -26,17 +27,17 @@ module zxip_cache #(
     output reg [19:0]  fill_phys,
     input  wire        fill_busy,
     input  wire        fill_done,
-    input  wire [127:0] fill_line,
+    input  wire [`XIP_FILL_BUS_W-1:0] fill_line,
     input  wire        fill_err
 );
-
-    `include "zxip_pkg_params.vh"
 
     localparam integer NUM_LINES  = `XIP_CACHE_LINES;
     localparam integer LINE_BYTES = `XIP_LINE_BYTES;
     localparam integer LINE_BITS  = LINE_BYTES * 8;
-    localparam integer OFF_W      = (LINE_BYTES == 16) ? 4 : 3;
-    localparam integer IDX_W      = (NUM_LINES  == 16) ? 4 : 3;
+    localparam integer OFF_W      = (LINE_BYTES == 32) ? 5 :
+                                    (LINE_BYTES == 16) ? 4 : 3;
+    localparam integer IDX_W      = (NUM_LINES == 32) ? 5 :
+                                    (NUM_LINES == 16) ? 4 : 3;
     localparam integer TAG_W      = 20 - OFF_W - IDX_W;
     localparam [13:0]  LAST_LINE_IN_WIN = (14'h3FFF >> OFF_W);
 

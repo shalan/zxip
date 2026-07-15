@@ -2,8 +2,8 @@
 // ZXip shared constants (macros for portable `include)
 //
 // Cache geometry (override with +define+ / -D):
-//   XIP_CACHE_LINES  : 8 or 16  (default 16)
-//   XIP_LINE_BYTES   : 8 or 16  (default 16)
+//   XIP_CACHE_LINES  : 8, 16, or 32  (default 16)
+//   XIP_LINE_BYTES   : 8, 16, or 32  (default 16)
 //
 // Host AHB is set via module parameters HOST_DW / HOST_AW on zxip_top
 // (defaults 16/16). Macros below remain for compile-time cache geometry.
@@ -23,8 +23,8 @@
 `define XIP_LINE_BITS   (`XIP_LINE_BYTES * 8)
 `endif
 
-// Max fill bus width (always 128; lower LINE_BITS used when LINE_BYTES=8)
-`define XIP_FILL_BUS_W  128
+// Max fill bus width (256 supports LINE_BYTES=32; smaller lines use low bits)
+`define XIP_FILL_BUS_W  256
 
 `define XIP_PHYS_W      20
 `define XIP_SPI_AW      24

@@ -178,7 +178,7 @@ module zxip_top #(
     wire [HOST_DW-1:0] lookup_rdata;
     wire        c_fill_req;
     wire [19:0] c_fill_phys;
-    wire [127:0] fill_line;
+    wire [`XIP_FILL_BUS_W-1:0] fill_line;
 
     wire        eng_active, eng_cs_n, eng_sck_en, eng_mosi;
     wire        eng_io0_oe, eng_io1_oe, eng_io2_oe, eng_io3_oe;

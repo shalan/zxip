@@ -11,7 +11,7 @@ device bring-up (e.g. program, status, mode switch).
 | Host bus | **AHB-Lite** RO slave, **`HOST_DW` = 16 (default) or 32**, **`HOST_AW` = 16 or 32** |
 | CSRs | **16-bit APB** |
 | Flash | SPI 1-1-1 (`0x0B` / `0x03`) and QSPI 1-4-4 (`0xEB`) |
-| Cache | Parameterized lines × bytes (8/16 × 8/16), default 16×16 B |
+| Cache | Parameterized lines × bytes (8/16/32 × 8/16/32), default 16×16 B |
 | RTL | IEEE Verilog-2005 |
 | License | Apache-2.0 |
 
@@ -69,7 +69,7 @@ LINES=8 BYTES=16 ./tb/scripts/run_sst26_iverilog.sh
 | 7 | `DTR_EN` (stub) |
 | 8 | `MODE_PHASE_EN` |
 | 10:9 | `SPI_CMD` |
-| 11 | `PREFETCH_EN` |
+| 11 | `PREFETCH_EN` (**default 0**; leave off until next-line prefetch is fixed) |
 
 ## Synthesis / STA (optional)
 

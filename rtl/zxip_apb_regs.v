@@ -140,7 +140,7 @@ module zxip_apb_regs (
             r_xip_mode      <= 1'b0;
             r_dtr_en        <= 1'b0;
             r_mode_phase_en <= 1'b0;
-            r_prefetch_en   <= 1'b1; // default on
+            r_prefetch_en   <= 1'b0; // default off (until prefetch fixed)
             r_spi_cmd_sel   <= 2'b00;
             r_clkdiv        <= 8'd8;
             r_dummy         <= `XIP_DUMMY_DEFAULT;

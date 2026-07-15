@@ -19,6 +19,12 @@ These items are **intentionally postponed**. Specs for the main path remain in `
 
 ---
 
+## Prefetch (next-line) — leave disabled (CSR default 0)
+
+Next-line prefetch floods the fill engine (fill starts ≫ demand misses on small
+caches) and hurts CPI. **`CTRL.PREFETCH_EN` defaults to 0**; keep it clear until
+the prefetch policy is fixed and re-validated. Hardware path remains for later.
+
 ## Deferred from Phase 5 — DTR (`0xED`, 1S-4D-4D)
 
 **Goal:** Dual-edge address/data on 4 IOs; command remains 1-line SDR.
